@@ -32,7 +32,7 @@ class VertexAI:
         Returns:
             The generated text.
         """
-        print(f"VertexAI: Generating text for prompt using gemini-1.0-pro-001 model")
-        model = GenerativeModel("gemini-1.0-pro-001")
+        print(f"VertexAI: Generating text for prompt using gemini-2.0-flash-001 model")
+        model = GenerativeModel("gemini-2.0-flash-001")
         response = model.generate_content(prompt)
         return response.text
