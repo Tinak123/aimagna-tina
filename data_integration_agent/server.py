@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, Request, HTTPException, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
@@ -234,7 +234,8 @@ async def lifespan(app: FastAPI):
         
         adk_app = get_fast_api_app(
             agents_dir=".",
-            web=True
+            web=True,
+            url_prefix="/dev-ui"
         )
         
         # Mount ADK under /dev-ui prefix
@@ -262,6 +263,11 @@ app.add_middleware(AuthMiddleware)
 async def login_page():
     """Serve login page."""
     return LOGIN_HTML
+
+@app.get("/dev-ui")
+async def dev_ui_redirect():
+    """Redirect /dev-ui (no trailing slash) to /dev-ui/ for the mounted ADK app."""
+    return RedirectResponse(url="/dev-ui/", status_code=302)
 
 @app.get("/health")
 async def health():
