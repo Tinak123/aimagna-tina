@@ -24,8 +24,8 @@ This module provides tools with:
 
 import os
 import json
-import glob
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 from typing import Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
@@ -54,6 +54,34 @@ except ImportError:
         generate_risk_assessment,
         validated_tool,
     )
+
+
+# =============================================================================
+# JSON SERIALIZATION HELPERS
+# =============================================================================
+
+def _json_safe_value(obj):
+    """Convert non-JSON-serializable objects to safe representations."""
+    if obj is None:
+        return None
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, bytes):
+        return obj.decode('utf-8', errors='replace')
+    if hasattr(obj, '__dict__'):
+        return str(obj)
+    return obj
+
+
+def _make_json_safe(data):
+    """Recursively convert a data structure to be JSON-serializable."""
+    if isinstance(data, dict):
+        return {k: _make_json_safe(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_make_json_safe(item) for item in data]
+    return _json_safe_value(data)
 
 
 # =============================================================================
@@ -216,7 +244,8 @@ def get_sample_data(
         for i, row in enumerate(results):
             if i == 0:
                 schema = list(row.keys())
-            rows.append(dict(row))
+            # Convert row to JSON-safe dict (handles date, datetime, Decimal, etc.)
+            rows.append(_make_json_safe(dict(row)))
         
         return {
             "dataset_id": dataset_id,
@@ -843,27 +872,33 @@ def execute_transformation(
 
 
 # =============================================================================
-# AUDIT LOG TOOLS
+# AUDIT LOG TOOLS - BigQuery-backed
 # =============================================================================
 
 def get_audit_logs(
     limit: int = 50,
-    date_yyyymmdd: str | None = None,
+    event_type: str | None = None,
+    risk_level: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     tool_context: ToolContext = None,
 ) -> dict:
-    """Return recent audit log events.
+    """Return recent audit log events from BigQuery.
 
     Notes:
-    - Audit logs are written by `log_audit_event` in `guardrails.py`.
-    - In Docker, `AUDIT_LOG_DIR` is typically `/tmp/audit_logs`.
-    - Log lines look like: "<timestamp> | INFO | {json}".
+    - Audit logs are stored in BigQuery with streaming inserts.
+    - Table: {project}.audit.audit_logs (partitioned by timestamp)
+    - Supports filtering by event_type, risk_level, and date range.
 
     Args:
-        limit: Max number of most recent events to return.
-        date_yyyymmdd: Optional specific date (e.g. "20251216"). If omitted, uses latest audit_*.log file.
+        limit: Max number of most recent events to return (1-500).
+        event_type: Optional filter (e.g. "MAPPING", "SQL_EXECUTION", "SECURITY").
+        risk_level: Optional filter (e.g. "LOW", "MEDIUM", "HIGH", "CRITICAL").
+        start_date: Optional start date filter (YYYY-MM-DD format).
+        end_date: Optional end date filter (YYYY-MM-DD format).
 
     Returns:
-        Dictionary with file metadata and parsed events.
+        Dictionary with query metadata and audit events.
     """
     try:
         limit = int(limit)
@@ -871,55 +906,91 @@ def get_audit_logs(
         limit = 50
     limit = max(1, min(limit, 500))
 
-    log_dir = os.environ.get("AUDIT_LOG_DIR", "./logs")
-    pattern = (
-        os.path.join(log_dir, f"audit_{date_yyyymmdd}.log")
-        if date_yyyymmdd
-        else os.path.join(log_dir, "audit_*.log")
-    )
-    candidates = sorted(glob.glob(pattern))
-    if not candidates:
-        return {
-            "status": "empty",
-            "log_dir": log_dir,
-            "pattern": pattern,
-            "message": "No audit log files found yet. Trigger an action (schema read, mapping, SQL validation/execution) to generate audit events.",
-        }
+    project_id = os.environ.get("BQ_PROJECT_ID", os.environ.get("GOOGLE_CLOUD_PROJECT"))
+    audit_dataset = os.environ.get("BQ_AUDIT_DATASET", "audit")
+    audit_table = os.environ.get("BQ_AUDIT_TABLE", "audit_logs")
+    table_id = f"{project_id}.{audit_dataset}.{audit_table}"
 
-    log_file = candidates[-1]
+    # Build query with optional filters
+    query_parts = [f"""
+        SELECT 
+            timestamp,
+            event_type,
+            action,
+            user_id,
+            risk_level,
+            details,
+            retention_days
+        FROM `{table_id}`
+        WHERE 1=1
+    """]
+    
+    query_params = []
+    
+    if event_type:
+        query_parts.append("AND event_type = @event_type")
+        query_params.append(bigquery.ScalarQueryParameter("event_type", "STRING", event_type.upper()))
+    
+    if risk_level:
+        query_parts.append("AND risk_level = @risk_level")
+        query_params.append(bigquery.ScalarQueryParameter("risk_level", "STRING", risk_level.upper()))
+    
+    if start_date:
+        query_parts.append("AND DATE(timestamp) >= @start_date")
+        query_params.append(bigquery.ScalarQueryParameter("start_date", "DATE", start_date))
+    
+    if end_date:
+        query_parts.append("AND DATE(timestamp) <= @end_date")
+        query_params.append(bigquery.ScalarQueryParameter("end_date", "DATE", end_date))
+    
+    query_parts.append(f"ORDER BY timestamp DESC LIMIT {limit}")
+    
+    query = "\n".join(query_parts)
+
     try:
-        with open(log_file, "r", encoding="utf-8") as f:
-            lines = f.read().splitlines()
+        client = bigquery.Client(project=project_id)
+        
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
+        results = client.query(query, job_config=job_config).result()
+        
+        events = []
+        for row in results:
+            event = {
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "event_type": row.event_type,
+                "action": row.action,
+                "user_id": row.user_id,
+                "risk_level": row.risk_level,
+                "retention_days": row.retention_days,
+            }
+            # Parse details JSON if present
+            if row.details:
+                try:
+                    event["details"] = json.loads(row.details) if isinstance(row.details, str) else row.details
+                except Exception:
+                    event["details"] = row.details
+            events.append(event)
+        
+        return {
+            "status": "ok",
+            "table": table_id,
+            "returned": len(events),
+            "filters": {
+                "event_type": event_type,
+                "risk_level": risk_level,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            "events": events,
+        }
+        
     except Exception as e:
         return {
             "status": "error",
-            "log_dir": log_dir,
-            "file": log_file,
+            "table": table_id,
             "error": str(e),
+            "message": "Failed to query audit logs. The audit table may not exist yet - trigger an action to auto-create it.",
         }
-
-    recent = lines[-limit:]
-    events = []
-    for line in recent:
-        # Expected format: "<ts> | <level> | <json>"
-        parts = line.split(" | ", 2)
-        if len(parts) == 3:
-            ts, level, payload = parts
-            try:
-                record = json.loads(payload)
-                events.append({"ts": ts, "level": level, "record": record})
-            except Exception:
-                events.append({"ts": ts, "level": level, "raw": payload})
-        else:
-            events.append({"raw": line})
-
-    return {
-        "status": "ok",
-        "log_dir": log_dir,
-        "file": log_file,
-        "returned": len(events),
-        "events": events,
-    }
 
 
 # =============================================================================

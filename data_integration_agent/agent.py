@@ -284,7 +284,7 @@ CAST(loan_amt AS NUMERIC) as original_loan_amount
 - Report validation results before execution
 - Provide execution summary with audit trail reference
 
-Always prioritize data safety. When in doubt, recommend dry_run validation first.""",
+Always prioritize data safety. Ask for dry_run validation as it is mandatory before execution.""",
     tools=[
         generate_transformation_sql_tool,
         execute_transformation_tool,

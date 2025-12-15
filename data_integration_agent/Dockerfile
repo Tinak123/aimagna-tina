@@ -29,19 +29,17 @@ RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
 # Copy application code into a subdirectory for proper ADK agent structure
 # ADK expects: <agents_dir>/<agent_name>/agent.py with root_agent
-COPY agent.py __init__.py tools.py guardrails.py ./data_integration_agent/
+COPY agent.py __init__.py tools.py guardrails.py session_config.py ./data_integration_agent/
 
 # Copy server.py to the root (it's not part of the agent module)
 COPY server.py .
 
-# Create logs directory outside /app (ADK scans /app for agent apps)
-RUN mkdir -p /tmp/audit_logs
-
 # Environment variables (overridden by Secret Manager in Cloud Run)
+# Note: AUDIT_LOG_DIR removed - audit logs now stored in BigQuery
+# Note: SESSION_DB_URL should be set via Secret Manager for persistent sessions
 ENV PORT=8080 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    AUDIT_LOG_DIR=/tmp/audit_logs
+    PYTHONDONTWRITEBYTECODE=1
 
 EXPOSE 8080
 

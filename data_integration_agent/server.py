@@ -235,13 +235,31 @@ async def lifespan(app: FastAPI):
     try:
         from google.adk.cli.fast_api import get_fast_api_app
         
+        # Import session service for persistent sessions
+        try:
+            from session_config import get_session_service
+            session_service = get_session_service()
+        except ImportError:
+            print("⚠️ session_config not found, using default session service")
+            session_service = None
+        except Exception as e:
+            print(f"⚠️ Failed to initialize session service: {e}")
+            session_service = None
+        
         # agents_dir should be the parent directory containing agent folders
         # Structure: /app/data_integration_agent/agent.py (with root_agent)
-        adk_app = get_fast_api_app(
-            agents_dir="/app",
-            web=True,
-            url_prefix="/dev-ui"
-        )
+        adk_app_kwargs = {
+            "agents_dir": "/app",
+            "web": True,
+            "url_prefix": "/dev-ui"
+        }
+        
+        # Add session_service if available
+        if session_service is not None:
+            adk_app_kwargs["session_service"] = session_service
+            print("✅ ADK app configured with persistent session service")
+        
+        adk_app = get_fast_api_app(**adk_app_kwargs)
         
         # Mount ADK under /dev-ui prefix
         app.mount("/dev-ui", adk_app)

@@ -29,29 +29,123 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 from typing import Any, Optional, Callable
 from functools import wraps
 
+from google.cloud import bigquery
+from google.cloud.exceptions import GoogleCloudError
+
 
 # =============================================================================
-# AUDIT LOGGING CONFIGURATION
+# AUDIT LOGGING CONFIGURATION - BigQuery Streaming Inserts
 # =============================================================================
 
-# Configure audit logger for compliance tracking
+# Configure console logger for fallback/debugging
 audit_logger = logging.getLogger("data_integration_audit")
 audit_logger.setLevel(logging.INFO)
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(
+    logging.Formatter('%(asctime)s | AUDIT | %(levelname)s | %(message)s')
+)
+audit_logger.addHandler(_console_handler)
 
-# Create file handler for audit trail
-_log_dir = os.environ.get("AUDIT_LOG_DIR", "./logs")
-os.makedirs(_log_dir, exist_ok=True)
-_audit_handler = logging.FileHandler(
-    os.path.join(_log_dir, f"audit_{datetime.now().strftime('%Y%m%d')}.log")
-)
-_audit_handler.setFormatter(
-    logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-)
-audit_logger.addHandler(_audit_handler)
+# BigQuery audit configuration
+_BQ_AUDIT_PROJECT = os.environ.get("BQ_PROJECT_ID", os.environ.get("GOOGLE_CLOUD_PROJECT"))
+_BQ_AUDIT_DATASET = os.environ.get("BQ_AUDIT_DATASET", "audit")
+_BQ_AUDIT_TABLE = os.environ.get("BQ_AUDIT_TABLE", "audit_logs")
+_BQ_AUDIT_TABLE_ID = f"{_BQ_AUDIT_PROJECT}.{_BQ_AUDIT_DATASET}.{_BQ_AUDIT_TABLE}"
+
+# Lazy-loaded BigQuery client for audit logging
+_audit_bq_client: Optional[bigquery.Client] = None
+
+
+def _get_audit_bq_client() -> bigquery.Client:
+    """Get or create BigQuery client for audit logging."""
+    global _audit_bq_client
+    if _audit_bq_client is None:
+        _audit_bq_client = bigquery.Client(project=_BQ_AUDIT_PROJECT)
+    return _audit_bq_client
+
+
+def _ensure_audit_table_exists() -> bool:
+    """
+    Ensure the audit_logs table exists in BigQuery with proper schema and partitioning.
+    Creates the dataset and table if they don't exist.
+    
+    Returns:
+        True if table exists or was created, False on error.
+    """
+    try:
+        client = _get_audit_bq_client()
+        
+        # Create dataset if not exists
+        dataset_ref = bigquery.DatasetReference(_BQ_AUDIT_PROJECT, _BQ_AUDIT_DATASET)
+        try:
+            client.get_dataset(dataset_ref)
+        except Exception:
+            dataset = bigquery.Dataset(dataset_ref)
+            dataset.location = os.environ.get("GOOGLE_CLOUD_LOCATION", "US")
+            dataset.description = "Audit logs for Data Integration Agent"
+            client.create_dataset(dataset, exists_ok=True)
+            audit_logger.info(f"Created audit dataset: {_BQ_AUDIT_DATASET}")
+        
+        # Check if table exists
+        table_ref = dataset_ref.table(_BQ_AUDIT_TABLE)
+        try:
+            client.get_table(table_ref)
+            return True
+        except Exception:
+            pass
+        
+        # Create table with schema and partitioning
+        schema = [
+            bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+            bigquery.SchemaField("event_type", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("action", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("risk_level", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("details", "JSON", mode="NULLABLE"),
+            bigquery.SchemaField("retention_days", "INT64", mode="REQUIRED"),
+        ]
+        
+        table = bigquery.Table(table_ref, schema=schema)
+        table.time_partitioning = bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field="timestamp",
+        )
+        table.description = "Audit logs with risk-based retention (30 days LOW/MEDIUM, 90+ days HIGH/CRITICAL)"
+        
+        client.create_table(table)
+        audit_logger.info(f"Created audit table: {_BQ_AUDIT_TABLE_ID}")
+        return True
+        
+    except Exception as e:
+        audit_logger.error(f"Failed to ensure audit table exists: {e}")
+        return False
+
+
+def _get_retention_days(risk_level: str) -> int:
+    """Get retention period in days based on risk level."""
+    retention_map = {
+        "LOW": 30,
+        "MEDIUM": 30,
+        "HIGH": 90,
+        "CRITICAL": 365,  # Keep critical logs for 1 year
+    }
+    return retention_map.get(risk_level.upper(), 30)
+
+
+def _json_serializer(obj: Any) -> Any:
+    """Custom JSON serializer for objects not serializable by default."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if hasattr(obj, '__dict__'):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def log_audit_event(
@@ -62,7 +156,8 @@ def log_audit_event(
     risk_level: str = "LOW"
 ) -> None:
     """
-    Logs an audit event for compliance and risk tracking.
+    Logs an audit event to BigQuery using streaming inserts.
+    Falls back to stdout logging if BigQuery insert fails.
     
     Args:
         event_type: Category of event (SCHEMA_ACCESS, MAPPING_APPROVAL, SQL_EXECUTION, etc.)
@@ -71,15 +166,56 @@ def log_audit_event(
         user_id: Identifier for the user/session
         risk_level: LOW, MEDIUM, HIGH, CRITICAL
     """
+    timestamp = datetime.utcnow()
+    retention_days = _get_retention_days(risk_level)
+    
+    # Serialize details to JSON string, handling date/datetime objects
+    try:
+        details_json = json.dumps(details, default=_json_serializer)
+    except Exception as e:
+        details_json = json.dumps({"error": f"Failed to serialize details: {e}", "raw": str(details)})
+    
     audit_record = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": timestamp.isoformat(),
         "event_type": event_type,
         "action": action,
         "user_id": user_id,
         "risk_level": risk_level,
-        "details": details
+        "details": details_json,
+        "retention_days": retention_days,
     }
-    audit_logger.info(json.dumps(audit_record))
+    
+    # Always log to stdout for Cloud Logging capture
+    audit_logger.info(json.dumps(audit_record, default=_json_serializer))
+    
+    # Attempt BigQuery streaming insert
+    try:
+        _ensure_audit_table_exists()
+        client = _get_audit_bq_client()
+        
+        # Prepare row for BigQuery (timestamp as datetime object)
+        bq_row = {
+            "timestamp": timestamp.isoformat(),
+            "event_type": event_type,
+            "action": action,
+            "user_id": user_id,
+            "risk_level": risk_level,
+            "details": details_json,
+            "retention_days": retention_days,
+        }
+        
+        errors = client.insert_rows_json(_BQ_AUDIT_TABLE_ID, [bq_row])
+        
+        if errors:
+            audit_logger.error(f"❌ BigQuery audit insert failed: {errors}")
+            print(f"AUDIT_BQ_ERROR: {errors}")  # Explicit stdout for visibility
+        
+    except GoogleCloudError as e:
+        audit_logger.error(f"❌ BigQuery audit error: {e}")
+        print(f"AUDIT_BQ_ERROR: {e}")  # Explicit stdout for visibility
+    except Exception as e:
+        audit_logger.error(f"❌ Unexpected audit error: {e}")
+        print(f"AUDIT_BQ_ERROR: {e}")  # Explicit stdout for visibility
 
 
 # =============================================================================

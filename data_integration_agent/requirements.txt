@@ -18,3 +18,8 @@ google-auth>=2.0.0
 # Web server
 uvicorn[standard]>=0.32.0
 fastapi>=0.115.0
+
+# Session persistence with Cloud SQL PostgreSQL
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+cloud-sql-python-connector[asyncpg]>=1.0.0
