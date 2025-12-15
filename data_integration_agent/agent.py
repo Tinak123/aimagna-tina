@@ -58,7 +58,7 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Dataset configuration from environment
 BQ_DATASET_SOURCE = os.environ.get("BQ_DATASET_SOURCE", "commercial_lending_source")
