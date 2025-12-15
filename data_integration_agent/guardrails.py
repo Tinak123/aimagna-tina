@@ -1,0 +1,517 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Guardrails and Validation Module for Data Integration Agent.
+
+This module provides:
+- Input validation and sanitization
+- Output validation to prevent hallucinations
+- SQL injection prevention
+- Audit logging for compliance and risk management
+- Confidence-based decision guardrails
+
+These controls address Model Risk requirements and ensure safe, reliable operation.
+"""
+
+import os
+import re
+import json
+import logging
+from datetime import datetime
+from typing import Any, Optional, Callable
+from functools import wraps
+
+
+# =============================================================================
+# AUDIT LOGGING CONFIGURATION
+# =============================================================================
+
+# Configure audit logger for compliance tracking
+audit_logger = logging.getLogger("data_integration_audit")
+audit_logger.setLevel(logging.INFO)
+
+# Create file handler for audit trail
+_log_dir = os.environ.get("AUDIT_LOG_DIR", "./logs")
+os.makedirs(_log_dir, exist_ok=True)
+_audit_handler = logging.FileHandler(
+    os.path.join(_log_dir, f"audit_{datetime.now().strftime('%Y%m%d')}.log")
+)
+_audit_handler.setFormatter(
+    logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+)
+audit_logger.addHandler(_audit_handler)
+
+
+def log_audit_event(
+    event_type: str,
+    action: str,
+    details: dict,
+    user_id: str = "system",
+    risk_level: str = "LOW"
+) -> None:
+    """
+    Logs an audit event for compliance and risk tracking.
+    
+    Args:
+        event_type: Category of event (SCHEMA_ACCESS, MAPPING_APPROVAL, SQL_EXECUTION, etc.)
+        action: Specific action taken
+        details: Additional context about the event
+        user_id: Identifier for the user/session
+        risk_level: LOW, MEDIUM, HIGH, CRITICAL
+    """
+    audit_record = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "event_type": event_type,
+        "action": action,
+        "user_id": user_id,
+        "risk_level": risk_level,
+        "details": details
+    }
+    audit_logger.info(json.dumps(audit_record))
+
+
+# =============================================================================
+# INPUT VALIDATION GUARDRAILS
+# =============================================================================
+
+# SQL injection patterns to block
+SQL_INJECTION_PATTERNS = [
+    r";\s*DROP\s+",
+    r";\s*DELETE\s+",
+    r";\s*TRUNCATE\s+",
+    r";\s*UPDATE\s+.*\s+SET\s+",
+    r"--\s*$",
+    r"/\*.*\*/",
+    r"UNION\s+SELECT",
+    r"INTO\s+OUTFILE",
+    r"LOAD_FILE\s*\(",
+]
+
+# Valid BigQuery identifier pattern
+VALID_IDENTIFIER_PATTERN = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
+
+
+def validate_identifier(identifier: str) -> tuple[bool, str]:
+    """
+    Validates that an identifier (table name, column name) is safe.
+    
+    Args:
+        identifier: The identifier to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not identifier:
+        return False, "Identifier cannot be empty"
+    
+    if len(identifier) > 1024:
+        return False, "Identifier exceeds maximum length (1024 characters)"
+    
+    if not re.match(VALID_IDENTIFIER_PATTERN, identifier):
+        return False, f"Invalid identifier format: {identifier}"
+    
+    # Check for SQL injection patterns
+    for pattern in SQL_INJECTION_PATTERNS:
+        if re.search(pattern, identifier, re.IGNORECASE):
+            log_audit_event(
+                "SECURITY",
+                "SQL_INJECTION_BLOCKED",
+                {"identifier": identifier, "pattern": pattern},
+                risk_level="CRITICAL"
+            )
+            return False, "Potential SQL injection detected"
+    
+    return True, ""
+
+
+def validate_sql_query(sql: str) -> tuple[bool, str, list]:
+    """
+    Validates generated SQL for safety before execution.
+    
+    Args:
+        sql: The SQL query to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message, warnings)
+    """
+    warnings = []
+    
+    if not sql or not sql.strip():
+        return False, "SQL query cannot be empty", []
+    
+    # Check for dangerous patterns
+    dangerous_patterns = [
+        (r"DROP\s+(TABLE|DATABASE|SCHEMA)", "DROP statements are not allowed"),
+        (r"TRUNCATE\s+TABLE", "TRUNCATE statements are not allowed"),
+        (r"DELETE\s+FROM\s+\S+\s*$", "DELETE without WHERE clause is not allowed"),
+        (r"UPDATE\s+\S+\s+SET\s+.*(?!WHERE)", "UPDATE without WHERE clause detected"),
+    ]
+    
+    for pattern, message in dangerous_patterns:
+        if re.search(pattern, sql, re.IGNORECASE):
+            log_audit_event(
+                "SECURITY",
+                "DANGEROUS_SQL_BLOCKED",
+                {"sql_preview": sql[:200], "pattern": pattern},
+                risk_level="HIGH"
+            )
+            return False, message, warnings
+    
+    # Add warnings for review
+    if "SELECT *" in sql.upper():
+        warnings.append("SELECT * detected - consider specifying columns explicitly")
+    
+    if sql.upper().count("JOIN") > 3:
+        warnings.append("Multiple JOINs detected - review for performance")
+    
+    return True, "", warnings
+
+
+# =============================================================================
+# OUTPUT VALIDATION (HALLUCINATION PREVENTION)
+# =============================================================================
+
+def validate_mapping_output(
+    mappings: list,
+    source_columns: set,
+    target_columns: set
+) -> tuple[bool, str, list]:
+    """
+    Validates mapping output to prevent hallucinated column names.
+    
+    This is a critical guardrail to ensure the AI doesn't invent
+    column names that don't exist in the actual schemas.
+    
+    Args:
+        mappings: List of proposed mappings
+        source_columns: Set of valid source column names
+        target_columns: Set of valid target column names
+        
+    Returns:
+        Tuple of (is_valid, error_message, hallucinated_columns)
+    """
+    hallucinated = []
+    
+    for mapping in mappings:
+        source_col = mapping.get("source_column")
+        target_col = mapping.get("target_column")
+        
+        # Check source column exists (if mapped)
+        if source_col and source_col not in source_columns:
+            hallucinated.append({
+                "type": "source",
+                "column": source_col,
+                "issue": "Column does not exist in source schema"
+            })
+        
+        # Check target column exists
+        if target_col and target_col not in target_columns:
+            hallucinated.append({
+                "type": "target",
+                "column": target_col,
+                "issue": "Column does not exist in target schema"
+            })
+    
+    if hallucinated:
+        log_audit_event(
+            "VALIDATION",
+            "HALLUCINATION_DETECTED",
+            {"hallucinated_columns": hallucinated},
+            risk_level="HIGH"
+        )
+        return False, f"Detected {len(hallucinated)} non-existent columns", hallucinated
+    
+    return True, "", []
+
+
+def validate_confidence_threshold(
+    mappings: list,
+    min_confidence: float = 0.5,
+    require_approval_below: float = 0.7
+) -> dict:
+    """
+    Analyzes mapping confidence scores and determines required actions.
+    
+    Args:
+        mappings: List of mappings with confidence scores
+        min_confidence: Minimum acceptable confidence (reject below this)
+        require_approval_below: Require human approval below this threshold
+        
+    Returns:
+        Dictionary with validation results and required actions
+    """
+    results = {
+        "auto_approved": [],
+        "requires_review": [],
+        "rejected": [],
+        "overall_confidence": 0.0,
+        "recommendation": ""
+    }
+    
+    confidences = []
+    
+    for mapping in mappings:
+        conf = mapping.get("confidence", 0)
+        confidences.append(conf)
+        
+        if conf >= require_approval_below:
+            results["auto_approved"].append(mapping)
+        elif conf >= min_confidence:
+            results["requires_review"].append(mapping)
+        else:
+            results["rejected"].append(mapping)
+    
+    if confidences:
+        results["overall_confidence"] = sum(confidences) / len(confidences)
+    
+    # Generate recommendation
+    if len(results["rejected"]) > 0:
+        results["recommendation"] = "BLOCK: Some mappings fall below minimum confidence threshold"
+    elif len(results["requires_review"]) > len(results["auto_approved"]):
+        results["recommendation"] = "REVIEW: Majority of mappings require human verification"
+    elif results["overall_confidence"] < 0.6:
+        results["recommendation"] = "CAUTION: Overall confidence is low, recommend manual review"
+    else:
+        results["recommendation"] = "PROCEED: Mappings meet confidence thresholds"
+    
+    return results
+
+
+# =============================================================================
+# EXPLAINABILITY HELPERS
+# =============================================================================
+
+def generate_mapping_explanation(mapping: dict) -> str:
+    """
+    Generates a human-readable explanation for a mapping decision.
+    
+    This supports explainability requirements by providing clear reasoning
+    for why a particular mapping was suggested.
+    
+    Args:
+        mapping: A single column mapping dictionary
+        
+    Returns:
+        Human-readable explanation string
+    """
+    source = mapping.get("source_column", "N/A")
+    target = mapping.get("target_column", "N/A")
+    confidence = mapping.get("confidence", 0)
+    transform = mapping.get("transformation")
+    source_type = mapping.get("source_type", "unknown")
+    target_type = mapping.get("target_type", "unknown")
+    
+    explanation_parts = []
+    
+    # Explain the match reason
+    if confidence >= 0.9:
+        explanation_parts.append(
+            f"✅ HIGH CONFIDENCE ({confidence*100:.0f}%): "
+            f"'{source}' → '{target}' - Exact or near-exact name match"
+        )
+    elif confidence >= 0.7:
+        explanation_parts.append(
+            f"🔶 MEDIUM CONFIDENCE ({confidence*100:.0f}%): "
+            f"'{source}' → '{target}' - Partial name match or similar pattern"
+        )
+    elif confidence >= 0.5:
+        explanation_parts.append(
+            f"⚠️ LOW CONFIDENCE ({confidence*100:.0f}%): "
+            f"'{source}' → '{target}' - Weak pattern match, requires verification"
+        )
+    else:
+        explanation_parts.append(
+            f"❌ UNMAPPED: '{target}' - No suitable source column found"
+        )
+    
+    # Explain type handling
+    if source_type != target_type and source:
+        explanation_parts.append(
+            f"   Type conversion needed: {source_type} → {target_type}"
+        )
+    
+    # Explain transformation
+    if transform:
+        explanation_parts.append(
+            f"   Transformation: {transform}"
+        )
+    
+    return "\n".join(explanation_parts)
+
+
+def generate_risk_assessment(operation: str, context: dict) -> dict:
+    """
+    Generates a risk assessment for a data integration operation.
+    
+    Args:
+        operation: Type of operation (SCHEMA_READ, MAPPING_SUGGEST, SQL_EXECUTE, etc.)
+        context: Contextual information about the operation
+        
+    Returns:
+        Risk assessment dictionary
+    """
+    risk_factors = []
+    risk_level = "LOW"
+    mitigations = []
+    
+    if operation == "SQL_EXECUTE":
+        risk_factors.append("Direct database modification")
+        risk_level = "HIGH"
+        mitigations.extend([
+            "Dry-run validation before execution",
+            "Human confirmation required",
+            "Transaction rollback capability"
+        ])
+        
+        # Check for high row counts
+        if context.get("estimated_rows", 0) > 10000:
+            risk_factors.append("Large data volume")
+            mitigations.append("Batch processing recommended")
+    
+    elif operation == "MAPPING_APPROVE":
+        avg_confidence = context.get("average_confidence", 0)
+        if avg_confidence < 0.7:
+            risk_factors.append("Low mapping confidence")
+            risk_level = "MEDIUM"
+            mitigations.append("Manual column-by-column review")
+        
+        unmapped = context.get("unmapped_count", 0)
+        if unmapped > 0:
+            risk_factors.append(f"{unmapped} unmapped columns")
+            mitigations.append("Review unmapped columns for data completeness")
+    
+    elif operation == "SCHEMA_READ":
+        risk_factors.append("Read-only operation")
+        mitigations.append("No data modification risk")
+    
+    return {
+        "operation": operation,
+        "risk_level": risk_level,
+        "risk_factors": risk_factors,
+        "mitigations": mitigations,
+        "timestamp": datetime.utcnow().isoformat(),
+        "recommendation": "PROCEED" if risk_level in ["LOW", "MEDIUM"] else "REVIEW_REQUIRED"
+    }
+
+
+# =============================================================================
+# DECORATOR FOR TOOL VALIDATION
+# =============================================================================
+
+def validated_tool(risk_level: str = "LOW"):
+    """
+    Decorator that adds validation, logging, and error handling to tools.
+    
+    Args:
+        risk_level: Expected risk level of the operation
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            tool_name = func.__name__
+            start_time = datetime.utcnow()
+            
+            # Log operation start
+            log_audit_event(
+                "TOOL_EXECUTION",
+                f"{tool_name}_START",
+                {"args": str(args)[:200], "kwargs": str(kwargs)[:200]},
+                risk_level=risk_level
+            )
+            
+            try:
+                result = func(*args, **kwargs)
+                
+                # Log successful completion
+                log_audit_event(
+                    "TOOL_EXECUTION",
+                    f"{tool_name}_SUCCESS",
+                    {
+                        "duration_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
+                        "result_type": type(result).__name__
+                    },
+                    risk_level=risk_level
+                )
+                
+                return result
+                
+            except Exception as e:
+                # Log error
+                log_audit_event(
+                    "TOOL_EXECUTION",
+                    f"{tool_name}_ERROR",
+                    {
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    },
+                    risk_level="HIGH"
+                )
+                raise
+        
+        return wrapper
+    return decorator
+
+
+# =============================================================================
+# CONSISTENCY CHECKER
+# =============================================================================
+
+def check_mapping_consistency(
+    previous_mappings: dict,
+    new_mappings: dict
+) -> dict:
+    """
+    Checks for consistency between previous and new mapping decisions.
+    
+    This helps detect potential model inconsistency or drift.
+    
+    Args:
+        previous_mappings: Previously generated mappings
+        new_mappings: Newly generated mappings for same tables
+        
+    Returns:
+        Consistency report
+    """
+    changes = []
+    consistent = True
+    
+    prev_map = {m["target_column"]: m for m in previous_mappings.get("mappings", [])}
+    new_map = {m["target_column"]: m for m in new_mappings.get("mappings", [])}
+    
+    for target, prev in prev_map.items():
+        if target in new_map:
+            new = new_map[target]
+            if prev.get("source_column") != new.get("source_column"):
+                consistent = False
+                changes.append({
+                    "target_column": target,
+                    "previous_source": prev.get("source_column"),
+                    "new_source": new.get("source_column"),
+                    "issue": "Source column mapping changed"
+                })
+    
+    if not consistent:
+        log_audit_event(
+            "CONSISTENCY",
+            "MAPPING_DRIFT_DETECTED",
+            {"changes": changes},
+            risk_level="MEDIUM"
+        )
+    
+    return {
+        "is_consistent": consistent,
+        "changes": changes,
+        "recommendation": "Review changes" if not consistent else "No drift detected"
+    }

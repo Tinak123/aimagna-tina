@@ -1,0 +1,20 @@
+# Data Integration Agent - Dependencies
+
+# Google ADK (Agent Development Kit)
+google-adk>=1.0.0
+
+# Google Cloud BigQuery
+google-cloud-bigquery>=3.0.0
+
+# Google Cloud Secret Manager
+google-cloud-secret-manager>=2.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Google Auth (usually included with google-cloud-bigquery)
+google-auth>=2.0.0
+
+# Web server
+uvicorn[standard]>=0.32.0
+fastapi>=0.115.0

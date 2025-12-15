@@ -1,0 +1,68 @@
+# =============================================================================
+# Cloud Build configuration for CI/CD
+# =============================================================================
+# Triggers on push to 'tina' branch
+# Builds and deploys to Cloud Run with Secret Manager integration
+# =============================================================================
+
+steps:
+  # Step 1: Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/lll-data-integration:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/lll-data-integration:latest'
+      - '-f'
+      - 'data_integration_agent/Dockerfile'
+      - 'data_integration_agent'
+    id: 'build'
+
+  # Step 2: Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/lll-data-integration:$COMMIT_SHA'
+    id: 'push-sha'
+    waitFor: ['build']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/lll-data-integration:latest'
+    id: 'push-latest'
+    waitFor: ['build']
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'lll-data-integration'
+      - '--image=gcr.io/$PROJECT_ID/lll-data-integration:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--timeout=300'
+      - '--min-instances=0'
+      - '--max-instances=10'
+      - '--set-secrets=GOOGLE_CLOUD_PROJECT=GOOGLE_CLOUD_PROJECT:latest,GOOGLE_CLOUD_LOCATION=GOOGLE_CLOUD_LOCATION:latest,GOOGLE_GENAI_USE_VERTEXAI=GOOGLE_GENAI_USE_VERTEXAI:latest,BQ_PROJECT_ID=BQ_PROJECT_ID:latest,BQ_DATASET_SOURCE=BQ_DATASET_SOURCE:latest,BQ_DATASET_TARGET=BQ_DATASET_TARGET:latest,GEMINI_MODEL=GEMINI_MODEL:latest,APP_PASSWORD=APP_PASSWORD:latest,AUDIT_LOG_DIR=AUDIT_LOG_DIR:latest'
+    id: 'deploy'
+    waitFor: ['push-sha']
+
+# Store images in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/lll-data-integration:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/lll-data-integration:latest'
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+# Timeout for entire build
+timeout: '1200s'
