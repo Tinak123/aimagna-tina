@@ -285,6 +285,9 @@ async def login(request: Request, response: Response):
     body = await request.json()
     password = body.get("password", "")
     
+    # Debug logging
+    print(f"🔍 Login attempt - received: '{password}' (len={len(password)}), expected: (len={len(APP_PASSWORD)}), match={password == APP_PASSWORD}")
+    
     if password == APP_PASSWORD:
         token = generate_token()
         response.set_cookie(
