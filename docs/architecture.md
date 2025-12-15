@@ -101,7 +101,9 @@ graph LR
 The multi-agent architecture was chosen over a monolithic approach for several critical reasons:
 
 #### 1. **Separation of Concerns**
+
 Each agent has a focused responsibility:
+
 - **Schema Analyzer** understands data structures
 - **Mapping Agent** handles the complex logic of column matching and confidence scoring
 - **Transformation Agent** manages SQL generation and execution safety
@@ -110,7 +112,9 @@ Each agent has a focused responsibility:
 This separation makes the system easier to maintain, test, and extend.
 
 #### 2. **Specialized Context & Expertise**
+
 Each agent is equipped with:
+
 - **Specific tools** relevant to its domain
 - **Specialized instructions** and few-shot examples
 - **Domain-specific vocabulary** for better LLM performance
@@ -118,7 +122,9 @@ Each agent is equipped with:
 For example, the Mapping Agent has detailed examples of high/medium/low confidence mappings with reasoning, while the Transformation Agent has SQL generation examples with risk warnings.
 
 #### 3. **Controlled State Sharing**
+
 Agents communicate via **session state** (`tool_context.state`):
+
 - Schema Analyzer stores `source_schema` and `target_schema`
 - Mapping Agent stores `suggested_mappings` and `approved_mappings`
 - Transformation Agent reads approved mappings to generate SQL
@@ -126,7 +132,9 @@ Agents communicate via **session state** (`tool_context.state`):
 This prevents context pollution and keeps each agent's scope clear.
 
 #### 4. **Human-in-the-Loop Checkpoints**
+
 The workflow includes natural approval gates:
+
 - Users review mapping suggestions before approval
 - Dry-run validation before SQL execution
 - Token-based confirmation for destructive operations
@@ -134,13 +142,17 @@ The workflow includes natural approval gates:
 Multi-agent architecture makes these checkpoints explicit in the workflow.
 
 #### 5. **Scalability & Extensibility**
+
 New capabilities can be added by:
+
 - Creating new specialized agents (e.g., Data Quality Agent, Schema Evolution Agent)
 - Adding tools to existing agents
 - Extending guardrails without changing agent logic
 
 #### 6. **Risk Mitigation**
+
 Isolating SQL execution in the Transformation Agent with strict guardrails:
+
 - SQL injection prevention at the tool layer
 - Mapping hallucination detection prevents invalid column references
 - Audit logging tracks all high-risk operations
@@ -252,6 +264,135 @@ sequenceDiagram
 
 ## Tools & Guardrails
 
+### Architectural Decision: Custom Tools vs. ADK Built-in Toolsets
+
+**Decision**: We implemented custom BigQuery tools instead of using ADK's built-in MCP Toolbox for Databases.
+
+#### ADK's BigQuery Toolset
+
+Google ADK provides [MCP Toolbox for Databases](https://google.github.io/adk-docs/tools/google-cloud/mcp-toolbox-for-databases/) with pre-built BigQuery support including:
+
+- SQL execution tools
+- Schema discovery tools  
+- AI-powered time series forecasting
+- Connection pooling and authentication handling
+- Enterprise-grade security features
+
+#### Why Custom Implementation?
+
+For this data integration use case, custom tools were more appropriate for several reasons:
+
+**1. Specialized Business Logic**
+
+Our tools implement domain-specific algorithms not available in generic toolsets:
+
+- **Confidence Scoring Algorithm**: Multi-factor analysis (name matching, type compatibility, semantic similarity) with 0-100% scoring
+- **Mapping Validation**: Custom hallucination detection that validates suggested columns against session-stored schemas
+- **Explainability Engine**: Generates human-readable reasoning for each mapping decision
+- **Risk Assessment**: Context-aware risk calculation based on operation type, confidence levels, and transformation complexity
+
+**2. Deep Integration with Guardrails**
+
+Custom tools allow tight coupling with our validation layer:
+
+```python
+# Our custom tool wraps operations with specific guardrails
+@validated_tool
+def suggest_column_mappings(source_table: str, target_table: str, tool_context: ToolContext):
+    # Validation steps specific to mapping operations
+    validate_identifier(source_table)
+    validate_identifier(target_table)
+    
+    # Generate mappings
+    mappings = _generate_mappings(...)
+    
+    # Custom validation: prevent AI hallucinations
+    is_valid, error_msg, hallucinated = validate_mapping_output(
+        mappings, source_col_names, target_col_names
+    )
+    
+    # Custom explainability: generate reasoning
+    for mapping in mappings:
+        mapping['explanation'] = generate_mapping_explanation(mapping)
+    
+    # Custom risk assessment
+    risk = generate_risk_assessment('MAPPING_SUGGEST', context)
+    
+    # Audit logging with custom event types
+    log_audit_event('MAPPING', 'MAPPINGS_SUGGESTED', details, risk_level=risk['risk_level'])
+    
+    return mappings
+```
+
+Generic toolsets wouldn't provide these domain-specific validation hooks.
+
+**3. Session State Management**
+
+Our workflow requires complex session state choreography:
+
+- **Schema Analyzer** stores `source_schema` and `target_schema` in session state
+- **Mapping Agent** reads schemas, generates `suggested_mappings`, waits for approval, stores `approved_mappings`
+- **Transformation Agent** reads `approved_mappings` to generate SQL
+
+This stateful workflow with explicit handoffs between agents requires custom tools that understand the state machine pattern.
+
+**4. Two-Phase Commit for Safety**
+
+Our execution model implements token-based confirmation:
+
+```python
+# Phase 1: Dry-run with token generation
+execute_transformation(dry_run=True)  
+# → Returns execution_token='TXN-20250115-143700-001'
+
+# Phase 2: Actual execution requires valid token
+execute_transformation(dry_run=False, token='TXN-20250115-143700-001')
+# → Validates token hasn't expired (30 min timeout)
+```
+
+This safety pattern is specific to our data integration workflow and not provided by generic database toolsets.
+
+**5. Custom SQL Generation**
+
+Our `generate_transformation_sql` tool produces:
+
+- **Dual output formats**: INSERT (full load) and MERGE (incremental)
+- **Inline documentation**: Comments explaining every transformation with confidence scores
+- **Risk annotations**: Warnings about potential data loss or type conversion issues
+- **Audit references**: Embedded execution tokens and timestamps
+
+Generic SQL execution tools wouldn't generate this specialized output.
+
+**6. Granular BigQuery Control**
+
+Direct use of `google-cloud-bigquery` Python client provides:
+
+- Fine-grained control over query construction (INFORMATION_SCHEMA queries)
+- Precise error handling for BigQuery-specific errors
+- Custom retry logic for transient failures
+- Direct access to query metadata (bytes processed, cache hits)
+
+**When to Use ADK Toolsets**
+
+ADK's built-in toolsets are excellent for:
+
+- General-purpose database queries without custom business logic
+- Rapid prototyping where connection management is the main complexity
+- Standard CRUD operations across multiple database types
+- Applications where generic schema discovery is sufficient
+
+**Trade-offs Accepted**
+
+By choosing custom tools, we accepted:
+
+- **More code to maintain**: ~1000 lines in `tools.py` + ~650 lines in `guardrails.py`
+- **Manual connection management**: We handle BigQuery client instantiation
+- **Custom error handling**: We implement our own retry logic and error messages
+
+However, these trade-offs are justified by the specialized requirements of intelligent data integration.
+
+---
+
 ### Tool Layer (`data_integration_agent/tools.py`)
 
 | Tool | Purpose | Guardrails |
@@ -267,18 +408,21 @@ sequenceDiagram
 ### Guardrails Layer (`data_integration_agent/guardrails.py`)
 
 #### 1. **Input Validation**
+
 - **SQL Injection Prevention**: Regex patterns block dangerous SQL keywords
 - **Identifier Validation**: Table/column names must match `^[a-zA-Z_][a-zA-Z0-9_]*$`
 - **Query Validation**: Checks for unsafe patterns before BigQuery execution
 
 #### 2. **Output Validation**
+
 - **Mapping Hallucination Detection**: Validates that source/target columns exist in actual schemas
-- **Confidence Thresholds**: 
+- **Confidence Thresholds**:
   - HIGH (>80%): Approved automatically with explanation
   - MEDIUM (50-80%): Requires review
   - LOW (<50%): Requires human confirmation
 
 #### 3. **Audit Logging**
+
 All operations logged to BigQuery (`{project}.audit.audit_logs`):
 
 ```sql
@@ -295,25 +439,31 @@ PARTITION BY DATE(timestamp);
 ```
 
 **Retention Policy**:
+
 - LOW/MEDIUM: 30 days
 - HIGH: 90 days
 - CRITICAL: 365 days
 
 #### 4. **Risk Assessment**
+
 Each operation assigned a risk level:
+
 - **LOW**: Schema reads, mapping suggestions
 - **MEDIUM**: Type conversions, semantic mappings
 - **HIGH**: SQL execution, data modifications
 - **CRITICAL**: Multi-table transformations, bulk deletes
 
 #### 5. **Explainability**
+
 Every mapping includes:
+
 - **Confidence score** with reasoning
 - **Transformation** description (if applicable)
 - **Risk level** with mitigation suggestions
 - **Recommendation** for next steps
 
 Example:
+
 ```
 Source: loan.loan_amt (FLOAT64) → Target: dim_loan.original_loan_amount (NUMERIC)
 Confidence: 72%
@@ -330,7 +480,7 @@ Recommendation: "Verify max values don't exceed NUMERIC(38,9) precision limits"
 ### GCP Infrastructure
 
 ```mermaid
-graph TB
+graph LR
     subgraph "Google Cloud Platform (ccibt-hack25ww7-713)"
         subgraph "Cloud Run (us-central1)"
             CR1[lll-data-integration<br/>2 CPU, 2Gi RAM<br/>Max 10 instances]
@@ -382,10 +532,11 @@ graph TB
 ### Deployed Resources
 
 #### Cloud Run Service
+
 | Property | Value |
 |----------|-------|
 | **Service Name** | `lll-data-integration` |
-| **URL** | https://lll-data-integration-417355809300.us-central1.run.app |
+| **URL** | <https://lll-data-integration-417355809300.us-central1.run.app> |
 | **Region** | us-central1 |
 | **Image** | `gcr.io/ccibt-hack25ww7-713/lll-data-integration:latest` |
 | **Memory** | 2Gi |
@@ -396,9 +547,10 @@ graph TB
 | **Authentication** | Allow unauthenticated (app-level password via `APP_PASSWORD`) |
 | **Service Account** | `417355809300-compute@developer.gserviceaccount.com` |
 
-**Console**: https://console.cloud.google.com/run?project=ccibt-hack25ww7-713
+**Console**: <https://console.cloud.google.com/run?project=ccibt-hack25ww7-713>
 
 #### Cloud SQL Instance
+
 | Property | Value |
 |----------|-------|
 | **Instance Name** | `adk-sessions` |
@@ -407,14 +559,16 @@ graph TB
 | **Purpose** | Session persistence (30-day retention) |
 | **Table** | `adk_sessions` (managed by ADK DatabaseSessionService) |
 
-**Console**: https://console.cloud.google.com/sql/instances/adk-sessions/overview?project=ccibt-hack25ww7-713
+**Console**: <https://console.cloud.google.com/sql/instances/adk-sessions/overview?project=ccibt-hack25ww7-713>
 
 **Connection Format**:
+
 ```
 postgresql+asyncpg://adk_user:adk_password@/adk_sessions?host=/cloudsql/ccibt-hack25ww7-713:us-central1:adk-sessions
 ```
 
 #### BigQuery Datasets
+
 | Dataset | Purpose | Tables | Console |
 |---------|---------|--------|---------|
 | `source_commercial_lending` | Source data | 13 tables (borrower, loan, facility, payment, collateral, guarantor, covenant, rate_index, rate_index_history, risk_rating, syndicate_member, syndicate_participation) | [Open](https://console.cloud.google.com/bigquery?project=ccibt-hack25ww7-713&d=source_commercial_lending) |
@@ -422,6 +576,7 @@ postgresql+asyncpg://adk_user:adk_password@/adk_sessions?host=/cloudsql/ccibt-ha
 | `audit` | Audit logs | `audit_logs` (partitioned by date) | [Open](https://console.cloud.google.com/bigquery?project=ccibt-hack25ww7-713&d=audit) |
 
 #### CI/CD Pipeline
+
 | Component | Configuration |
 |-----------|--------------|
 | **Trigger Name** | `lll-data-integration-cicd` |
@@ -432,7 +587,7 @@ postgresql+asyncpg://adk_user:adk_password@/adk_sessions?host=/cloudsql/ccibt-ha
 | **Machine Type** | E2_HIGHCPU_8 |
 | **Timeout** | 1200s (20 minutes) |
 
-**Console**: https://console.cloud.google.com/cloud-build/triggers?project=ccibt-hack25ww7-713
+**Console**: <https://console.cloud.google.com/cloud-build/triggers?project=ccibt-hack25ww7-713>
 
 ### Environment Configuration
 
@@ -455,10 +610,12 @@ Environment variables are injected via **Secret Manager** in Cloud Run:
 ### Local Development
 
 For local Docker development, the agent falls back to:
+
 - **In-memory sessions** (if `SESSION_DB_URL` not set)
 - **Local credentials** (mounted from `~/.config/gcloud`)
 
 Run locally:
+
 ```powershell
 # Build
 docker build -t lll-data-integration:latest -f data_integration_agent/Dockerfile data_integration_agent
@@ -582,6 +739,7 @@ gcloud run services logs read lll-data-integration \
 ## Summary
 
 AIMagna demonstrates enterprise-grade AI agent design with:
+
 - **Clear separation of concerns** via specialized agents
 - **Robust guardrails** preventing hallucinations and SQL injection
 - **Comprehensive audit trails** for compliance and debugging
