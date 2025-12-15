@@ -232,8 +232,10 @@ async def lifespan(app: FastAPI):
     try:
         from google.adk.cli.fast_api import get_fast_api_app
         
+        # agents_dir should be the parent directory containing agent folders
+        # Structure: /app/data_integration_agent/agent.py (with root_agent)
         adk_app = get_fast_api_app(
-            agents_dir=".",
+            agents_dir="/app",
             web=True,
             url_prefix="/dev-ui"
         )

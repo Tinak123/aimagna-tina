@@ -27,16 +27,21 @@ WORKDIR /app
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
-# Copy application code
-COPY . .
+# Copy application code into a subdirectory for proper ADK agent structure
+# ADK expects: <agents_dir>/<agent_name>/agent.py with root_agent
+COPY agent.py __init__.py tools.py guardrails.py ./data_integration_agent/
 
-# Create logs directory
-RUN mkdir -p /app/logs
+# Copy server.py to the root (it's not part of the agent module)
+COPY server.py .
+
+# Create logs directory outside the agent folder to avoid ADK confusion
+RUN mkdir -p /app/audit_logs
 
 # Environment variables (overridden by Secret Manager in Cloud Run)
 ENV PORT=8080 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    AUDIT_LOG_DIR=/app/audit_logs
 
 EXPOSE 8080
 
