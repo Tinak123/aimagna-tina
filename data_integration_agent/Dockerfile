@@ -40,5 +40,5 @@ ENV PORT=8080 \
 
 EXPOSE 8080
 
-# Run the server - use $PORT environment variable
-CMD ["sh", "-c", "python -m uvicorn server:app --host 0.0.0.0 --port $PORT"]
+# Run the server directly (server.py reads PORT from environment)
+CMD ["python", "server.py"]

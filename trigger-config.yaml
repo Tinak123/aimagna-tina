@@ -1,0 +1,7 @@
+name: lll-data-integration-tina
+github:
+  owner: Tinak123
+  name: aimagna-tina
+  push:
+    branch: ^tina$
+filename: cloudbuild.yaml

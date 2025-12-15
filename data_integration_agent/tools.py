@@ -31,16 +31,28 @@ from google.adk.tools.tool_context import ToolContext
 from google.cloud import bigquery
 
 # Import guardrails for validation, explainability, and risk management
-from .guardrails import (
-    log_audit_event,
-    validate_identifier,
-    validate_sql_query,
-    validate_mapping_output,
-    validate_confidence_threshold,
-    generate_mapping_explanation,
-    generate_risk_assessment,
-    validated_tool,
-)
+try:
+    from .guardrails import (
+        log_audit_event,
+        validate_identifier,
+        validate_sql_query,
+        validate_mapping_output,
+        validate_confidence_threshold,
+        generate_mapping_explanation,
+        generate_risk_assessment,
+        validated_tool,
+    )
+except ImportError:
+    from guardrails import (
+        log_audit_event,
+        validate_identifier,
+        validate_sql_query,
+        validate_mapping_output,
+        validate_confidence_threshold,
+        generate_mapping_explanation,
+        generate_risk_assessment,
+        validated_tool,
+    )
 
 
 # =============================================================================

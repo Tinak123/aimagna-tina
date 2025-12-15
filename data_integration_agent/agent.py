@@ -30,15 +30,26 @@ from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 
 # Import tools from tools.py
-from .tools import (
-    get_source_schema_tool,
-    get_target_schema_tool,
-    get_sample_data_tool,
-    suggest_column_mappings_tool,
-    approve_mappings_tool,
-    generate_transformation_sql_tool,
-    execute_transformation_tool,
-)
+try:
+    from .tools import (
+        get_source_schema_tool,
+        get_target_schema_tool,
+        get_sample_data_tool,
+        suggest_column_mappings_tool,
+        approve_mappings_tool,
+        generate_transformation_sql_tool,
+        execute_transformation_tool,
+    )
+except ImportError:
+    from tools import (
+        get_source_schema_tool,
+        get_target_schema_tool,
+        get_sample_data_tool,
+        suggest_column_mappings_tool,
+        approve_mappings_tool,
+        generate_transformation_sql_tool,
+        execute_transformation_tool,
+    )
 
 # Load environment variables
 load_dotenv()
