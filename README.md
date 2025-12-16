@@ -205,6 +205,46 @@ docker run -d --name lll-agent -p 8080:8080 \
   lll-data-integration:latest
 ```
 
+### BigQuery Data Setup
+
+Before running the agent, you need to populate BigQuery with sample data:
+
+**PowerShell (Windows):**
+```powershell
+# Basic usage (uses current gcloud project)
+.\scripts\setup-bigquery-data.ps1
+
+# With options
+.\scripts\setup-bigquery-data.ps1 -Project "your-project-id" -Location "US" -Force
+```
+
+**Bash (Linux/Mac):**
+```bash
+chmod +x scripts/setup-bigquery-data.sh
+./scripts/setup-bigquery-data.sh
+
+# With options
+./scripts/setup-bigquery-data.sh -p "your-project-id" -l "US" -f
+```
+
+**What the script does:**
+| Step | Action |
+|------|--------|
+| 1. Create Datasets | Creates `source_commercial_lending`, `target_commercial_lending`, and `audit` |
+| 2. Load Source Data | Loads 12 CSV files into source dataset with auto-detected schemas |
+| 3. Create Target Schema | Executes 11 DDL files to create empty dimension/fact tables |
+| 4. Create Audit Table | Creates partitioned `audit_logs` table for agent logging |
+
+**Script Options:**
+| Flag | Description |
+|------|-------------|
+| `-Project` / `-p` | GCP Project ID |
+| `-Location` / `-l` | BigQuery location (US, EU, etc.) |
+| `-Force` / `-f` | Overwrite existing tables |
+| `-SkipSource` / `--skip-source` | Skip loading CSV data |
+| `-SkipTarget` / `--skip-target` | Skip creating target schema |
+| `-SkipAudit` / `--skip-audit` | Skip creating audit table |
+
 ### Cloud Run Deployment
 
 The project includes Cloud Build configuration for automated deployment:
@@ -281,7 +321,9 @@ multi-agent-ccibt/
 │   └── Target-Schema/            # 11 target table DDL files
 ├── scripts/                      # Deployment scripts
 │   ├── deploy.ps1                # Cloud Run deployment
-│   └── sync-secrets.ps1          # Secret management
+│   ├── sync-secrets.ps1          # Secret management
+│   ├── setup-bigquery-data.ps1   # BigQuery data setup (Windows)
+│   └── setup-bigquery-data.sh    # BigQuery data setup (Linux/Mac)
 ├── cloudbuild.yaml               # Cloud Build configuration
 ├── trigger-config.yaml           # Cloud Build trigger setup
 └── README.md                     # This file

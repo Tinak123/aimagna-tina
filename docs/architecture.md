@@ -736,6 +736,72 @@ gcloud run services logs read lll-data-integration \
 
 ---
 
+## Assumptions
+
+This section documents key assumptions made during the architecture, design, and implementation of AIMagna.
+
+### Architecture Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **Single Cloud Provider (GCP)** | System is designed exclusively for Google Cloud Platform services | Multi-cloud deployment would require significant refactoring of BigQuery, Vertex AI, and Cloud Run integrations |
+| **BigQuery as Data Warehouse** | All source and target data resides in BigQuery | Supporting other databases (Snowflake, Redshift) requires new tool implementations |
+| **Vertex AI Availability** | Gemini 3 Pro model is available in the target region | Model unavailability would break all agent functionality |
+| **Stateless Container Execution** | Cloud Run instances can be terminated at any time | Long-running transformations (>5 min) may timeout; session state must be externalized |
+| **Network Connectivity** | Agents can reach BigQuery and Vertex AI APIs | Air-gapped environments are not supported |
+
+### Design Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **English Language Only** | All schema names, column names, and user interactions are in English | Non-English schemas may have reduced mapping accuracy |
+| **Relational Data Model** | Source and target follow traditional relational patterns (tables, columns, FKs) | NoSQL, semi-structured, or graph data models are not supported |
+| **Schema Stability** | Source and target schemas do not change during a mapping session | Schema changes mid-session may cause mapping failures or stale references |
+| **Single Dataset Scope** | Each integration session operates on one source and one target dataset | Cross-dataset joins or multi-dataset transformations require manual SQL |
+| **Column-Level Mapping** | Transformations are 1:1 or 1:many column mappings | Complex transformations (pivots, aggregations) require manual SQL generation |
+| **UTF-8 Encoding** | All data uses UTF-8 character encoding | Encoding mismatches may cause data corruption |
+
+### Requirements Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **Human Approval Required** | All mappings require human review before execution | Fully automated pipelines not supported without code changes |
+| **Dry-Run First** | SQL must be validated via dry-run before actual execution | Direct execution without validation increases risk of errors |
+| **Single User Sessions** | Sessions are designed for individual users, not concurrent multi-user editing | Concurrent edits to same mapping may cause conflicts |
+| **Audit Retention** | Audit logs are retained for compliance (30-365 days) | Shorter retention may violate compliance requirements |
+| **Internet Access** | Users access the system via web browser over HTTPS | Offline or disconnected operation is not supported |
+
+### Data Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **Sample Data Representative** | Commercial lending sample data reflects real-world patterns | Production schemas may have additional complexity not covered |
+| **Reasonable Data Volumes** | Transformations operate on datasets that fit BigQuery processing limits | Very large datasets (>100TB) may require partitioned processing |
+| **Clean Source Data** | Source data has reasonable quality (no excessive nulls, valid types) | Poor data quality may cause transformation failures |
+| **Unique Primary Keys** | All tables have identifiable unique keys for MERGE operations | Missing PKs require INSERT-only patterns |
+| **Date Ranges** | Source data dates span 2022-01-01 to 2025-09-30 | Historical data outside this range may not have rate index coverage |
+
+### Security Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **GCP IAM Enforcement** | Access control is managed via GCP IAM roles | Misconfigured IAM may allow unauthorized access |
+| **No PII in Logs** | Audit logs do not contain personally identifiable information | PII in logs would require additional redaction/encryption |
+| **HTTPS Only** | All traffic is encrypted in transit via HTTPS | HTTP traffic would expose sensitive data |
+| **Password Authentication Sufficient** | Simple password auth meets security requirements for demo/hackathon | Production deployment should use OAuth/OIDC/SSO |
+| **Workload Identity** | Service accounts use workload identity federation (no keys) | Key-based auth increases security risk |
+
+### Operational Assumptions
+
+| Assumption | Rationale | Impact if Invalid |
+|------------|-----------|-------------------|
+| **Auto-Scaling Adequate** | Cloud Run auto-scaling (0-10 instances) handles expected load | High concurrency may require increased limits |
+| **Cost Acceptable** | Vertex AI and BigQuery costs (~$0.01-0.05 per session) are acceptable | High-volume usage may require cost optimization |
+| **Cloud SQL Optional** | System functions with in-memory sessions if Cloud SQL unavailable | Session persistence across restarts requires Cloud SQL |
+| **Logging Sufficient** | Console and BigQuery logging provide adequate observability | Complex debugging may require additional tracing |
+
+---
+
 ## Summary
 
 AIMagna demonstrates enterprise-grade AI agent design with:
