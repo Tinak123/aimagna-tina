@@ -330,7 +330,7 @@ Recommendation: "Verify max values don't exceed NUMERIC(38,9) precision limits"
 ### GCP Infrastructure
 
 ```mermaid
-graph TB
+graph LR
     subgraph "Google Cloud Platform (ccibt-hack25ww7-713)"
         subgraph "Cloud Run (us-central1)"
             CR1[lll-data-integration<br/>2 CPU, 2Gi RAM<br/>Max 10 instances]
