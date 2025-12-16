@@ -2,7 +2,11 @@
 
 > **AI-powered data integration that reduces onboarding time from weeks to hours**
 
-[![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0.0-blue)](https://github.com/google/adk) [![Gemini](https://img.shields.io/badge/Gemini-3.0%20Pro-purple)](https://cloud.google.com/vertex-ai) [![BigQuery](https://img.shields.io/badge/BigQuery-Enabled-green)](https://cloud.google.com/bigquery) [![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Deployed-orange)](https://cloud.google.com/run) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0.0-blue)](https://github.com/google/adk)
+[![Gemini](https://img.shields.io/badge/Gemini-3.0%20Pro-purple)](https://cloud.google.com/vertex-ai)
+[![BigQuery](https://img.shields.io/badge/BigQuery-Enabled-green)](https://cloud.google.com/bigquery)
+[![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Deployed-orange)](https://cloud.google.com/run)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ## Table of Contents
 
