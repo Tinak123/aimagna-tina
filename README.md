@@ -1,11 +1,5 @@
 # AIMagna: Multi Agent Data Integration Demo
 
-> **AI-powered data integration that reduces onboarding from weeks to hours**
-
-[![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0.0-blue)](https://github.com/google/adk)
-[![Gemini](https://img.shields.io/badge/Gemini-2.0%20Flash-purple)](https://cloud.google.com/vertex-ai)
-[![BigQuery](https://img.shields.io/badge/BigQuery-Enabled-green)](https://cloud.google.com/bigquery)
-
 ## 🎯 Problem Statement
 
 Enterprise data integration remains one of the most time-consuming challenges in modern data engineering:
@@ -337,4 +331,5 @@ This project is licensed under the Apache License 2.0 - see the LICENSE file for
 **Built with ❤️ using Google ADK, Gemini, and BigQuery**
 
  
+
  
