@@ -1,0 +1,17 @@
+# Set default behavior to automatically normalize line endings
+* text=auto eol=lf
+
+# Markdown files should always have LF endings
+*.md text eol=lf
+
+# Shell scripts should have LF endings
+*.sh text eol=lf
+
+# PowerShell can have CRLF on Windows
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
