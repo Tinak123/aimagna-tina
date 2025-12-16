@@ -91,43 +91,34 @@ AIMagna addresses these challenges through:
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     AIMagna Data Integration System                      │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                    DATA INTEGRATION COORDINATOR                     │ │
-│  │                     (Root Agent - Gemini 3 Pro)                     │ │
-│  │                                                                      │ │
-│  │   Routes tasks to specialized agents based on workflow stage        │ │
-│  └────────────────────────────────────────────────────────────────────┘ │
-│                                   │                                      │
-│       ┌───────────────┬───────────┼───────────┬───────────────┐         │
-│       ▼               ▼           ▼           ▼               ▼         │
-│  ┌──────────┐   ┌──────────┐ ┌──────────┐ ┌──────────┐  ┌──────────┐   │
-│  │  SCHEMA  │   │ MAPPING  │ │TRANSFORM │ │  AUDIT   │  │  HUMAN   │   │
-│  │ ANALYZER │   │  AGENT   │ │  AGENT   │ │  AGENT   │  │ IN LOOP  │   │
-│  │          │   │          │ │          │ │          │  │          │   │
-│  │• Schemas │   │• Suggest │ │• Gen SQL │ │• Query   │  │• Approve │   │
-│  │• Metadata│   │• Score   │ │• Validate│ │• Filter  │  │• Confirm │   │
-│  │• Profile │   │• Explain │ │• Execute │ │• Report  │  │• Review  │   │
-│  └──────────┘   └──────────┘ └──────────┘ └──────────┘  └──────────┘   │
-│                                                                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                           GUARDRAILS LAYER                               │
-│  • SQL Injection Prevention  • Hallucination Detection                  │
-│  • Confidence Validation     • Audit Logging (BigQuery Streaming)       │
-│  • Risk Assessment           • Explainability Engine                    │
-└─────────────────────────────────────────────────────────────────────────┘
-                                   │
-                    ┌──────────────┴──────────────┐
-                    ▼                              ▼
-            ┌─────────────┐               ┌─────────────┐
-            │  BigQuery   │               │  BigQuery   │
-            │   SOURCE    │               │   TARGET    │
-            │  (12 tables)│               │ (11 tables) │
-            └─────────────┘               └─────────────┘
+```mermaid
+flowchart TB
+    subgraph System["AIMagna Data Integration System"]
+        subgraph Coordinator["DATA INTEGRATION COORDINATOR<br/>(Root Agent - Gemini 3 Pro)"]
+            ROOT["Routes tasks to specialized agents based on workflow stage"]
+        end
+        
+        ROOT --> SCHEMA & MAPPING & TRANSFORM & AUDIT & HUMAN
+        
+        subgraph Agents[" "]
+            SCHEMA["**SCHEMA<br/>ANALYZER**<br/>• Schemas<br/>• Metadata<br/>• Profile"]
+            MAPPING["**MAPPING<br/>AGENT**<br/>• Suggest<br/>• Score<br/>• Explain"]
+            TRANSFORM["**TRANSFORM<br/>AGENT**<br/>• Gen SQL<br/>• Validate<br/>• Execute"]
+            AUDIT["**AUDIT<br/>AGENT**<br/>• Query<br/>• Filter<br/>• Report"]
+            HUMAN["**HUMAN<br/>IN LOOP**<br/>• Approve<br/>• Confirm<br/>• Review"]
+        end
+        
+        subgraph Guards["GUARDRAILS LAYER"]
+            G1["• SQL Injection Prevention  • Hallucination Detection<br/>• Confidence Validation  • Audit Logging (BigQuery Streaming)<br/>• Risk Assessment  • Explainability Engine"]
+        end
+        
+        Agents --> Guards
+    end
+    
+    Guards --> SOURCE & TARGET
+    
+    SOURCE[("BigQuery<br/>SOURCE<br/>(12 tables)")]
+    TARGET[("BigQuery<br/>TARGET<br/>(11 tables)")]
 ```
 
 For detailed architecture documentation including design rationale and workflow diagrams, see [docs/architecture.md](docs/architecture.md).
