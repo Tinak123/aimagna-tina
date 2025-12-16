@@ -20,7 +20,7 @@ if (-not $Project) {
     }
 }
 
-Write-Host "🔄 Syncing secrets to Google Secret Manager" -ForegroundColor Cyan
+Write-Host "[SYNC] Syncing secrets to Google Secret Manager" -ForegroundColor Cyan
 Write-Host "   Project: $Project" -ForegroundColor Gray
 Write-Host "   Env File: $EnvFile" -ForegroundColor Gray
 Write-Host "   Disable older enabled versions: $DisableOlderEnabledVersions" -ForegroundColor Gray
@@ -106,11 +106,13 @@ $secretsToSync = @(
     "GOOGLE_CLOUD_LOCATION", 
     "GOOGLE_GENAI_USE_VERTEXAI",
     "BQ_PROJECT_ID",
+    "BQ_LOCATION",
     "BQ_DATASET_SOURCE",
     "BQ_DATASET_TARGET",
+    "BQ_AUDIT_DATASET",
     "GEMINI_MODEL",
     "APP_PASSWORD",
-    "AUDIT_LOG_DIR"
+    "SESSION_DB_URL"
 )
 
 # Read .env file
@@ -137,7 +139,7 @@ $errors = 0
 foreach ($secretName in $secretsToSync) {
     if ($envVars.ContainsKey($secretName)) {
         $value = $envVars[$secretName]
-        Write-Host "  📝 $secretName" -NoNewline
+        Write-Host "  [SYNC] $secretName" -NoNewline
         
         # Check if secret exists
         $exists = gcloud secrets describe $secretName --project=$Project 2>$null
@@ -156,7 +158,7 @@ foreach ($secretName in $secretsToSync) {
         }
         
         if ($LASTEXITCODE -eq 0) {
-            Write-Host " ✅" -ForegroundColor Green
+            Write-Host " [OK]" -ForegroundColor Green
             $synced++
 
             if ($DisableOlderEnabledVersions) {
@@ -166,13 +168,13 @@ foreach ($secretName in $secretsToSync) {
                 Verify-SecretPayloadHygiene -SecretName $secretName -ProjectId $Project
             }
         } else {
-            Write-Host " ❌" -ForegroundColor Red
+            Write-Host " [ERROR]" -ForegroundColor Red
             $errors++
         }
     } else {
-        Write-Host "  ⚠️  $secretName (not in .env)" -ForegroundColor Yellow
+        Write-Host "  [WARN] $secretName (not in .env)" -ForegroundColor Yellow
     }
 }
 
 Write-Host ""
-Write-Host "✨ Sync complete: $synced synced, $errors errors" -ForegroundColor Cyan
+Write-Host "[DONE] Sync complete: $synced synced, $errors errors" -ForegroundColor Cyan

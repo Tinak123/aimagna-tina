@@ -86,7 +86,7 @@ def _ensure_audit_table_exists() -> bool:
             client.get_dataset(dataset_ref)
         except Exception:
             dataset = bigquery.Dataset(dataset_ref)
-            dataset.location = os.environ.get("GOOGLE_CLOUD_LOCATION", "US")
+            dataset.location = os.environ.get("BQ_LOCATION", "US")
             dataset.description = "Audit logs for Data Integration Agent"
             client.create_dataset(dataset, exists_ok=True)
             audit_logger.info(f"Created audit dataset: {_BQ_AUDIT_DATASET}")
